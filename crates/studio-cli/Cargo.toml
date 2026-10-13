@@ -15,3 +15,4 @@ serde_json.workspace = true
 mcp-gate = { path = "../mcp-gate" }
 asset-hub = { path = "../asset-hub" }
 engine-runtime = { path = "../engine-runtime" }
+script-sandbox = { path = "../script-sandbox" }

@@ -1,6 +1,19 @@
 use serde_json::Value;
 use std::io::{BufRead, Write};
 
+pub mod gates;
+pub mod llm;
+pub mod manifest;
+pub mod policy;
+pub mod receipt;
+pub mod state;
+pub mod stats;
+pub mod vram;
+
+pub use gates::{GateReport, ReplayInput, SingleGate};
+pub use policy::{AgentCtx, AgentId, CallBudget, TranscriptLog};
+pub use state::{Approval, GateError, GateVerdict, PatchState};
+
 pub const E_PARSE: i32 = -32700;
 pub const E_VERSION: i32 = -32001;
 pub const E_METHOD_NOT_FOUND: i32 = -32601;

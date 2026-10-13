@@ -1,2 +1,32 @@
 # AI sidecars are loopback-only containers; never workspace dependencies (spec 00 P6).
-services: {}
+# Phase 4: llama.cpp + Ollama over loopback OpenAI-compat HTTP (spec 05 §5).
+# Models are BYOK: place a GGUF at ./models/ (gitignored) or point the
+# services at your weights; the engine never links these images.
+#
+# Tag notes (probed 2026-10-13, recorded in docs/perf/phase4.md):
+# - spec 05 §5 pins llama.cpp `server-b6032`; that build tag is pruned
+#   upstream, so we track `:server` pinned by digest (same server binary).
+# - spec 05 §5 writes `ollama:0.11`; the registry carries `0.11.0`
+#   (same release line, full semver).
+services:
+  llama-server:
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:c789283572ba78c2699b8945a96e654c850f938a717883f2e6187a14adac698f
+    command:
+      - "-m"
+      - "/models/qwen2.5-coder-7b-q4_k_m.gguf"
+      - "--port"
+      - "39010"
+      - "--ctx-size"
+      - "8192"
+    ports:
+      - "127.0.0.1:39010:39010"
+    volumes:
+      - "./models:/models:ro"
+    deploy:
+      resources:
+        reservations:
+          memory: 8G
+  ollama:
+    image: ollama/ollama:0.11.0
+    ports:
+      - "127.0.0.1:11434:11434"

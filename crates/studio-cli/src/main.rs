@@ -1,6 +1,8 @@
 use mcp_gate::{handle_request_line, E_METHOD_NOT_FOUND, E_PARSE, E_VERSION, SUPPORTED_METHODS};
 use serde_json::Value;
 
+mod gates_cli;
+
 const USAGE: &str = "usage: studio-cli <command> [options]\n\
     \n\
     commands:\n\
@@ -26,6 +28,16 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
           Run the asset-hub watcher headless and print debounced events.\n\
       gen-stress --out <path> [--count <n>] [--seed <n>]\n\
           Generate a deterministic stress scenario (default 10k entities).\n\
+      gate-demo --agent <id> --prompt <path> [--allow-ai] [--approver <name>] [--ai-tier <tier>]\n\
+          Run the Scene Builder demo: propose → G1–G5 → approve → merge,\n\
+          writing staging/blake3:<hash>/ + receipt.json (total < 60s).\n\
+      gate-negative-tests\n\
+          Reject one fixture per gate (E_PARSE/E_TYPE/E_LINT/E_SANDBOX/E_REPLAY)\n\
+          with structured errors and retry-budget decrement.\n\
+      hallucination-report\n\
+          Print the per-gate reject-rate table (tracked metric, spec 05 §4).\n\
+      script-test --fuel <n> --mem-mib <n> --no-net --epoch-ms <n> <module.wasm>\n\
+          Policy gate for staged Wasm (fuel/mem/net/epoch; execution in Phase 5).\n\
       help | --help | -h\n\
           Print this usage.\n";
 
@@ -63,6 +75,10 @@ fn real_main() -> i32 {
         "cook" => cmd_cook(&args[2..]),
         "watch" => cmd_watch(&args[2..]),
         "gen-stress" => cmd_gen_stress(&args[2..]),
+        "gate-demo" => gates_cli::cmd_gate_demo(&args[2..]),
+        "gate-negative-tests" => gates_cli::cmd_gate_negative_tests(&args[2..]),
+        "hallucination-report" => gates_cli::cmd_hallucination_report(&args[2..]),
+        "script-test" => gates_cli::cmd_script_test(&args[2..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             0
@@ -490,38 +506,13 @@ fn cmd_replay(args: &[String]) -> i32 {
         None => 60,
     };
     let expect_path = flag_value(args, "--expect-hashes");
-    let scenario = match engine_runtime::sim::Scenario::load(&scenario_path) {
-        Ok(loaded) => loaded,
+    let dumped = match gates_cli::replay_dump(&scenario_path, ticks, every) {
+        Ok(dumped) => dumped,
         Err(message) => {
             eprintln!("studio-cli: {message}");
             return 1;
         }
     };
-    let mut world = engine_runtime::sim::create_world(scenario.seed, scenario.fixed_dt);
-    engine_runtime::sim::spawn_scenario(&mut world, &scenario);
-    let mut schedule = engine_runtime::sim::build_fixed_schedule();
-    let mut dumped: Vec<(u64, String)> = Vec::new();
-    for _ in 0..ticks {
-        schedule.run(&mut world);
-        world.resource_mut::<engine_runtime::Tick>().0 += 1;
-        let seed = world
-            .get_resource::<engine_runtime::SimSeed>()
-            .map(|s| s.0)
-            .unwrap_or(0);
-        let tick = world
-            .get_resource::<engine_runtime::Tick>()
-            .map(|t| t.0)
-            .unwrap_or(0);
-        world.insert_resource(engine_runtime::InputWord(
-            engine_runtime::sim::derive_input_word(seed, tick),
-        ));
-        if tick % every == 0 {
-            let hash = engine_runtime::hash_tick(&mut world);
-            let line = format!("blake3:{hash}");
-            println!("{tick} {line}");
-            dumped.push((tick, line));
-        }
-    }
     if let Some(path) = expect_path {
         match load_expected_hashes(&path) {
             Ok(expected) => {

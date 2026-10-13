@@ -8,6 +8,13 @@
 # Content-addressed asset store (reproducible via `studio-cli cook --all
 # --content-addressed`; spec 04 §6)
 .studio/store/
+# Phase-4 agent staging runs + local gate telemetry (reproducible via
+# `studio-cli gate-demo ...`; spec 05 §7)
+.studio/staging/blake3:*/
+.studio/gate-stats.jsonl
+# BYOK model weights (sidecars only; never committed, never linked)
+tools/ai-sidecars/models/*.gguf
+tools/ai-sidecars/models/*.bin
 # Pinned Slang toolchain (reproducible via tools/fetch-slang.sh + flake.nix)
 tools/slang-2025.12/
 # Packager output (Phase 5)

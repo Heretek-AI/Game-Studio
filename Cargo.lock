@@ -1378,6 +1378,7 @@ dependencies = [
 name = "mcp-gate"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "serde",
  "serde_json",
 ]
@@ -2225,6 +2226,7 @@ dependencies = [
  "asset-hub",
  "engine-runtime",
  "mcp-gate",
+ "script-sandbox",
  "serde",
  "serde_json",
 ]

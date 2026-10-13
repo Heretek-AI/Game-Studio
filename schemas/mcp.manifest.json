@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/mcp.manifest/v1.json",
+  "title": "GameMcpManifest",
+  "description": "GameMCP server manifest: the 8 tools agents consume, with timeouts and policies (spec 05 section 3). Mirrored by mcp-gate/src/manifest.rs and asserted identical in tests.",
+  "type": "object",
+  "properties": {
+    "name": { "const": "game-studio-mcp" },
+    "version": { "const": "1.0.0" },
+    "tools": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "inputSchema": {
+            "type": "object",
+            "properties": { "$ref": { "type": "string" } },
+            "required": ["$ref"]
+          },
+          "timeouts": {
+            "type": "object",
+            "properties": { "ms": { "type": "integer", "minimum": 1 } },
+            "required": ["ms"]
+          },
+          "sideEffects": { "type": "string" },
+          "policy": { "type": "string" }
+        },
+        "required": ["name", "inputSchema", "timeouts", "sideEffects", "policy"]
+      }
+    }
+  },
+  "required": ["name", "version", "tools"],
+  "additionalProperties": false,
+  "name": "game-studio-mcp",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "scene.query",
+      "inputSchema": { "$ref": "schemas/scene.query.json" },
+      "timeouts": { "ms": 2000 },
+      "sideEffects": "none",
+      "policy": "read-only"
+    },
+    {
+      "name": "scene.applyPatch",
+      "inputSchema": { "$ref": "schemas/levelpatch.json" },
+      "timeouts": { "ms": 8000 },
+      "sideEffects": "staged-only",
+      "policy": "requires base_hash match + all 5 gates + human approve for non-local branches"
+    },
+    {
+      "name": "asset.import",
+      "inputSchema": { "$ref": "schemas/asset.import.json" },
+      "timeouts": { "ms": 8000 },
+      "sideEffects": "staged-only",
+      "policy": "lands in staging/blake3:<hash>/ + receipt.json; promotion via asset.reload only"
+    },
+    {
+      "name": "build.run",
+      "inputSchema": { "$ref": "schemas/build.run.json" },
+      "timeouts": { "ms": 30000 },
+      "sideEffects": "sandboxed-build",
+      "policy": "agents may pass --shaders-only and --tests-only; --release requires human role"
+    },
+    {
+      "name": "sim.replay",
+      "inputSchema": { "$ref": "schemas/sim.replay.json" },
+      "timeouts": { "ms": 60000 },
+      "sideEffects": "none",
+      "policy": "fixed seed + fixed dt; returns tick hash chain + mismatch index or OK"
+    },
+    {
+      "name": "render.screenshot",
+      "inputSchema": { "$ref": "schemas/render.screenshot.json" },
+      "timeouts": { "ms": 15000 },
+      "sideEffects": "none",
+      "policy": "headless Lavapipe/SwiftShader allowed; native GPU screenshots are read-only"
+    },
+    {
+      "name": "script.check",
+      "inputSchema": { "$ref": "schemas/script.check.json" },
+      "timeouts": { "ms": 20000 },
+      "sideEffects": "none",
+      "policy": "deno/tsc or cargo check in sandbox; returns diagnostics JSON"
+    },
+    {
+      "name": "script.test",
+      "inputSchema": { "$ref": "schemas/script.test.json" },
+      "timeouts": { "ms": 20000 },
+      "sideEffects": "sandboxed",
+      "policy": "wasmtime fuel=10M, mem=64MiB, no net, epoch 50ms; returns traps as structured errors"
+    }
+  ]
+}
