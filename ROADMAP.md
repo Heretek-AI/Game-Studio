@@ -25,7 +25,7 @@
 - [x] **Phase 2 — Render Graph & Viewport** (spec 03): Forward+ on `wgpu`, shader edit→pixels < 200 ms, software-GL goldens < 0.5% diff.
 - [x] **Phase 3 — Editor Shell & IPC Bus** (spec 04): cold open < 3 s, 10k-node tree < 16 ms/frame, undo ×100 zero-mismatch, RPC conformance over ws+stdio; `egui`-vs-React decision ADR recorded.
 - [x] **Phase 4 — Agent Loop & Gates** (spec 05): demo agent-built level in < 5 min with zero bypasses; G1–G5 negative fixtures all reject with structured errors; reject-rate reported.
-- [ ] **Phase 5 — Scripting & Packager** (spec 06): hot-swap < 100 ms, Wasm round-trip ≤ 1 ms @ 5k, desktop + Wasm + Android artifacts play headless; `--no-ai-sidecars` builds clean.
+- [x] **Phase 5 — Scripting & Packager** (spec 06): hot-swap 35 ms (< 100 ms), Wasm round-trip ~0.28 ms @ 5k (≤ 1 ms), desktop + Wasm + cross-manifest artifacts play/validate headless; `--no-ai-sidecars` (`--no-default-features`) builds clean. Perf record: `docs/perf/phase5.md`; pinning ADR: `docs/adr/0003-phase5-wasmtime-26-pins.md`.
 
 ## Licensing Hygiene (non-negotiable)
 

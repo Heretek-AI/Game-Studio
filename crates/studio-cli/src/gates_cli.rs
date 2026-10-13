@@ -530,7 +530,8 @@ pub(crate) fn cmd_hallucination_report(_args: &[String]) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// script-test (G4 exact command; full Wasmtime execution lands in Phase 5)
+// script-test (G4 command; Phase 5 promotes the policy stub to real
+// Wasmtime execution — spec 06 §2–§3, spec 08 Phase 5 acceptance)
 // ---------------------------------------------------------------------------
 
 pub(crate) fn cmd_script_test(args: &[String]) -> i32 {
@@ -544,11 +545,28 @@ pub(crate) fn cmd_script_test(args: &[String]) -> i32 {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(script_sandbox::DEFAULT_EPOCH_MS);
     let no_net = args.iter().any(|a| a == "--no-net");
-    let module = args
-        .iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
-        .unwrap_or_default();
+    // Module = first positional arg (flag values skipped).
+    let mut module = String::new();
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--no-net" {
+            continue;
+        }
+        if arg == "--fuel" || arg == "--mem-mib" || arg == "--epoch-ms" {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with("--") {
+            continue;
+        }
+        if !arg.starts_with("--") && module.is_empty() {
+            module = arg.clone();
+        }
+    }
     if module.is_empty() {
         eprintln!("studio-cli: script-test needs <module.wasm>");
         return 2;
@@ -560,6 +578,7 @@ pub(crate) fn cmd_script_test(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // Phase-4 policy checks stay as the fast path (same messages).
     if bytes.len() as u64 > u64::from(mem_mib) * 1024 * 1024 {
         eprintln!(
             "script-test: E_SANDBOX OOM: {} bytes > {mem_mib}MiB",
@@ -584,6 +603,40 @@ pub(crate) fn cmd_script_test(args: &[String]) -> i32 {
             }
         }
     }
-    println!("script-test: {module} ({} bytes) fuel={fuel} mem={mem_mib}MiB epoch={epoch_ms}ms no-net={no_net} ... PASS (policy gate; execution lands in Phase 5)", bytes.len());
-    0
+    // Phase 5: real execution. The sandbox is always no-net (the linker
+    // defines no socket imports); the flag records the caller's expectation.
+    let limits = script_sandbox::SandboxLimits {
+        fuel,
+        mem_bytes: u64::from(mem_mib) * 1024 * 1024,
+        epoch_ms,
+    };
+    let engine = match script_sandbox::build_engine() {
+        Ok(engine) => engine,
+        Err(err) => {
+            eprintln!("script-test: E_SANDBOX LinkError: engine: {err:#}");
+            return 1;
+        }
+    };
+    // Deterministic probe input: seed from the module digest so the same
+    // module always sees the same entities.
+    let input = script_sandbox::exec::probe_input(&bytes, 8);
+    match script_sandbox::exec::run_tick(&engine, &bytes, &input, &limits) {
+        Ok(report) => {
+            println!(
+                "script-test: {module} ({} bytes) fuel={fuel} mem={mem_mib}MiB epoch={epoch_ms}ms no-net={no_net} ... PASS ({} commands, fuel_used={} elapsed={}ms)",
+                bytes.len(),
+                report.commands.len(),
+                report.fuel_used,
+                report.elapsed_ms
+            );
+            0
+        }
+        Err(err) => {
+            eprintln!("script-test: {err} (module {module})");
+            eprintln!(
+                "script-test: hint: sandboxes run fuel={fuel} mem={mem_mib}MiB no-net epoch={epoch_ms}ms; host unaffected"
+            );
+            1
+        }
+    }
 }

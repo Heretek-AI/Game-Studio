@@ -6,3 +6,21 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# wasmtime 26.0.0: newest Wasmtime that unifies with the frozen pins; see
+# docs/adr/0003-phase5-wasmtime-26-pins.md. default-features OFF:
+# component-model pulls encoding_rs 0.8.42 (edition2024, unparsable on cargo
+# 1.82) and wat pulls indexmap ^2.7 (conflicts with frozen =2.6.0).
+# runtime+std+cranelift is the complete core-Wasm closure we need.
+wasmtime = { version = "=26.0.0", default-features = false, features = ["runtime", "std", "cranelift"] }
+serde.workspace = true
+serde_json.workspace = true
+postcard = { version = "=1.1.3" }
+anyhow.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+criterion = { version = "=0.5.1" }
+
+[[bench]]
+name = "script_roundtrip"
+harness = false

@@ -2,6 +2,7 @@ use mcp_gate::{handle_request_line, E_METHOD_NOT_FOUND, E_PARSE, E_VERSION, SUPP
 use serde_json::Value;
 
 mod gates_cli;
+mod package_cli;
 
 const USAGE: &str = "usage: studio-cli <command> [options]\n\
     \n\
@@ -37,7 +38,13 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
       hallucination-report\n\
           Print the per-gate reject-rate table (tracked metric, spec 05 §4).\n\
       script-test --fuel <n> --mem-mib <n> --no-net --epoch-ms <n> <module.wasm>\n\
-          Policy gate for staged Wasm (fuel/mem/net/epoch; execution in Phase 5).\n\
+          Real sandbox execution (fuel/mem/net/epoch enforced by Wasmtime).\n\
+      hot-swap-demo --scenario <path>\n\
+          Swap echo_v1->echo_v2 at a tick boundary (<100ms, old-live-on-failure)\n\
+          with replay hashes still matching.\n\
+      package --target <triple> --scene <path>\n\
+          Assemble a deterministic dist/ artifact (desktop runner, web shell\n\
+          with SUBGROUPS_OFF + 256MiB budget, cross manifests).\n\
       help | --help | -h\n\
           Print this usage.\n";
 
@@ -79,6 +86,8 @@ fn real_main() -> i32 {
         "gate-negative-tests" => gates_cli::cmd_gate_negative_tests(&args[2..]),
         "hallucination-report" => gates_cli::cmd_hallucination_report(&args[2..]),
         "script-test" => gates_cli::cmd_script_test(&args[2..]),
+        "hot-swap-demo" => package_cli::cmd_hot_swap_demo(&args[2..]),
+        "package" => package_cli::cmd_package(&args[2..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             0

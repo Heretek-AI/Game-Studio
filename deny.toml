@@ -13,6 +13,12 @@ unused-allowed-license = "warn"
 allow = [
     "MIT",
     "Apache-2.0",
+    # Phase 5 (ADR 0003): Cranelift (Wasmtime backend) is SPDX
+    # "Apache-2.0 WITH LLVM-exception" — OSI-approved, FSF-free, strictly
+    # Apache-2.0 plus an extra patent grant, no copyleft. Outside spec-02 §6's
+    # deny set (GPL/LGPL/AGPL, SSPL, OpenRAIL, CC-NC); allowed as Apache-2.0
+    # family. Revisit only if the runtime closure adds non-permissive terms.
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
