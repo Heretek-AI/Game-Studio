@@ -1,0 +1,11 @@
+# Game-Studio root ignores — Phase 0+1 pre-flight (spec 00 §5 layout)
+# Rust build outputs (workspace + any per-crate)
+/target
+**/target/
+# Content-addressed render caches (reproducible from shaders/; spec 03 §3)
+.studio/pso/
+.studio/shader-out/
+# Packager output (Phase 5)
+/dist/
+# Local scratch
+*.log

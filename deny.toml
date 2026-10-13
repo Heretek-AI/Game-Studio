@@ -1,0 +1,42 @@
+# cargo-deny config — spec 02 §6 allow-list (runtime link closure).
+# Allowed: MIT, Apache-2.0, BSD-2/3, ISC, Zlib, CC0, Unlicense (+ isolated MPL-2.0).
+# Denied: GPL/LGPL/AGPL, SSPL, OpenRAIL, CC-NC, Inria-NC.
+[graph]
+
+# Note (cargo-deny >= 0.18.4): every license NOT in `allow` is denied by
+# default, which enforces the spec-02 deny set (GPL/LGPL/AGPL, SSPL,
+# OpenRAIL, CC-NC, Inria-NC) without a `deny` key. Unicode-DFS-2016 /
+# Unicode-3.0 are permissive attribution licenses required by
+# unicode-ident (via serde); they are not copyleft and stay allowed.
+[licenses]
+unused-allowed-license = "warn"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,2 @@
+# AI sidecars are loopback-only containers; never workspace dependencies (spec 00 P6).
+services: {}
