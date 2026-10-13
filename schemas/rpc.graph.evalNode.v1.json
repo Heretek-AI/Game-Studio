@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/graph.evalNode/v1.json",
+  "title": "graph.evalNode",
+  "description": "JSON-RPC 2.0 method graph.evalNode/v1 params+result envelopes. Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "layout": {
+          "type": "object"
+        },
+        "data_only": {
+          "const": true
+        }
+      },
+      "required": [
+        "node",
+        "layout",
+        "data_only"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "params",
+    "result"
+  ],
+  "additionalProperties": true
+}

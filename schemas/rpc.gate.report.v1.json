@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/gate.report/v1.json",
+  "title": "gate.report",
+  "description": "JSON-RPC 2.0 notification gate.report/v1 (server->clients, no id). Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "const": "2.0"
+    },
+    "method": {
+      "const": "gate.report/v1"
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "verdict": {
+          "enum": [
+            "pass",
+            "reject"
+          ]
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "hash"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "jsonrpc",
+    "method",
+    "params"
+  ],
+  "additionalProperties": false
+}

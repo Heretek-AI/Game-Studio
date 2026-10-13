@@ -107,7 +107,9 @@ dependencies = [
 name = "asset-hub"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "blake3",
+ "crossbeam-channel",
  "serde",
  "serde_json",
 ]
@@ -691,6 +693,17 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "editor-shell"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "asset-hub",
+ "blake3",
+ "crossbeam-channel",
+ "engine-runtime",
+ "mcp-gate",
+ "ron",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "either"

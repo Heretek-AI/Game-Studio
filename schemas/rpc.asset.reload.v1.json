@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/asset.reload/v1.json",
+  "title": "asset.reload",
+  "description": "JSON-RPC 2.0 method asset.reload/v1 params+result envelopes. Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "reloaded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "handle",
+        "hash",
+        "reloaded"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "params",
+    "result"
+  ],
+  "additionalProperties": true
+}

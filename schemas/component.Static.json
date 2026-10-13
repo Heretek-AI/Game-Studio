@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/component.Static/v1.json",
+  "title": "Static",
+  "description": "Inspector schema for Static (spec 04 section 3). Drives egui, Tauri/React, and CLI inspectors so they can never disagree.",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": false
+}

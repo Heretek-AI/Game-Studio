@@ -19,3 +19,6 @@ rust-version = "1.82"
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = { version = "=1.0.143" }
 blake3 = { version = "=1.5.4" }
+ron = { version = "=0.8.1" }
+anyhow = { version = "=1.0.98" }
+crossbeam-channel = { version = "=0.5.15" }

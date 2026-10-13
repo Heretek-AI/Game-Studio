@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/scene.getNode/v1.json",
+  "title": "scene.getNode",
+  "description": "JSON-RPC 2.0 method scene.getNode/v1 params+result envelopes. Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "hash"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "params",
+    "result"
+  ],
+  "additionalProperties": true
+}

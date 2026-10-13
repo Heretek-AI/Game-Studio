@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/asset.changed/v1.json",
+  "title": "asset.changed",
+  "description": "JSON-RPC 2.0 notification asset.changed/v1 (server->clients, no id). Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "const": "2.0"
+    },
+    "method": {
+      "const": "asset.changed/v1"
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "old_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "new_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "handle",
+        "old_hash",
+        "new_hash"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "jsonrpc",
+    "method",
+    "params"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/component.Name/v1.json",
+  "title": "Name",
+  "description": "Inspector schema for Name (spec 04 section 3). Drives egui, Tauri/React, and CLI inspectors so they can never disagree.",
+  "type": "object",
+  "properties": {
+    "0": {
+      "type": "string",
+      "maxLength": 128
+    }
+  },
+  "required": [
+    "0"
+  ],
+  "additionalProperties": false
+}

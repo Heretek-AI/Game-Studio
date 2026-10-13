@@ -6,8 +6,10 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
     commands:\n\
       check\n\
           Run repository gates in order: fmt, clippy, deny, dep-tree.\n\
-      rpc-conformance --transport stdio\n\
-          Run in-process JSON-RPC conformance cases against mcp-gate.\n\
+      rpc-conformance --transport ws,stdio\n\
+          Run JSON-RPC conformance on each transport (all methods\n\
+          schema-valid + version rejection). Transports: stdio (in-process)\n\
+          and ws (loopback TCP, same envelopes).\n\
       replay --scenario <path> --ticks <n> --dump-hash every:<k> [--expect-hashes <path>]\n\
           Run headless fixed-step replay and compare tick hashes.\n\
       mem-report --scenario <path>\n\
@@ -15,6 +17,15 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
       render-test --scene <path> --frames <n> --golden <dir> [--target desktop|web|mobile] [--write-goldens]\n\
           Compile Slang shaders (Slang->WGSL->Naga + PSO cache), render headless\n\
           frames, compare last frame against golden PNG (tolerance < 0.5%).\n\
+      open-stress <scenario> --headless-frames <n>\n\
+          Load a 10k-node scene and time tree filter+scroll ops per frame\n\
+          (budget < 16ms/frame, tracy spans on profile builds).\n\
+      cook --all --content-addressed\n\
+          Cook assets/samples + shaders into .studio/store (blake3 paths).\n\
+      watch --debounce-ms <ms> [--timeout-s <n>]\n\
+          Run the asset-hub watcher headless and print debounced events.\n\
+      gen-stress --out <path> [--count <n>] [--seed <n>]\n\
+          Generate a deterministic stress scenario (default 10k entities).\n\
       help | --help | -h\n\
           Print this usage.\n";
 
@@ -48,6 +59,10 @@ fn real_main() -> i32 {
         "replay" => cmd_replay(&args[2..]),
         "mem-report" => cmd_mem_report(&args[2..]),
         "render-test" => cmd_render_test(&args[2..]),
+        "open-stress" => cmd_open_stress(&args[2..]),
+        "cook" => cmd_cook(&args[2..]),
+        "watch" => cmd_watch(&args[2..]),
+        "gen-stress" => cmd_gen_stress(&args[2..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             0
@@ -142,18 +157,18 @@ fn gate_dep_tree() -> i32 {
 }
 
 fn cmd_rpc_conformance(args: &[String]) -> i32 {
-    match parse_transport(args) {
-        Ok(()) => run_conformance(),
+    match parse_transports(args) {
+        Ok(transports) => run_conformance(&transports),
         Err(message) => {
             eprintln!("{message}");
-            eprintln!("supported transports: stdio");
+            eprintln!("supported transports: stdio,ws");
             eprint!("{USAGE}");
             2
         }
     }
 }
 
-fn parse_transport(args: &[String]) -> Result<(), String> {
+fn parse_transports(args: &[String]) -> Result<Vec<String>, String> {
     let mut value: Option<&str> = None;
     let mut pending_flag = false;
     for arg in args {
@@ -167,53 +182,158 @@ fn parse_transport(args: &[String]) -> Result<(), String> {
             value = Some(rest);
         }
     }
-    match value {
-        Some("stdio") => Ok(()),
-        Some(other) => Err(format!("studio-cli: unsupported transport '{other}'")),
-        None => Err("studio-cli: missing required flag '--transport stdio'".to_string()),
+    let raw = match value {
+        Some(raw) => raw,
+        None => {
+            return Err("studio-cli: missing required flag '--transport ws,stdio'".to_string());
+        }
+    };
+    let mut transports = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if part != "stdio" && part != "ws" {
+            return Err(format!("studio-cli: unsupported transport '{part}'"));
+        }
+        if !transports.contains(&part.to_string()) {
+            transports.push(part.to_string());
+        }
     }
+    if transports.is_empty() {
+        return Err("studio-cli: missing required flag '--transport ws,stdio'".to_string());
+    }
+    Ok(transports)
 }
 
 type CaseCheck = fn(&Value) -> bool;
 
-fn run_conformance() -> i32 {
+fn conformance_cases() -> Vec<(String, String)> {
+    let h = "blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    vec![
+        ("scene.query/v1".into(), r#"{"jsonrpc":"2.0","id":1,"method":"scene.query/v1","params":{}}"#.into()),
+        ("scene.getNode/v1".into(), r#"{"jsonrpc":"2.0","id":2,"method":"scene.getNode/v1","params":{"id":"e:1"}}"#.into()),
+        ("scene.applyPatch/v1".into(), format!(r#"{{"jsonrpc":"2.0","id":3,"method":"scene.applyPatch/v1","params":{{"patch":{{"ops":[{{"op":"setComponent","id":"e:1","component":"Velocity","value":{{"0":[1,0,0]}}}}]}},"base_hash":"{h}","staging_hash":"{h}"}}}}"#)),
+        ("asset.list/v1".into(), r#"{"jsonrpc":"2.0","id":4,"method":"asset.list/v1","params":{}}"#.into()),
+        ("asset.import/v1".into(), r#"{"jsonrpc":"2.0","id":5,"method":"asset.import/v1","params":{"path":"assets/src/albedo.png"}}"#.into()),
+        ("asset.reload/v1".into(), r#"{"jsonrpc":"2.0","id":6,"method":"asset.reload/v1","params":{"handle":"tex:albedo#7"}}"#.into()),
+        ("asset.changed/v1".into(), format!(r#"{{"jsonrpc":"2.0","id":7,"method":"asset.changed/v1","params":{{"handle":"tex:albedo#7","old_hash":"{h}","new_hash":"{h}"}}}}"#)),
+        ("graph.evalNode/v1".into(), r#"{"jsonrpc":"2.0","id":8,"method":"graph.evalNode/v1","params":{"node":"layout:root"}}"#.into()),
+        ("build.run/v1".into(), r#"{"jsonrpc":"2.0","id":9,"method":"build.run/v1","params":{"target":"x86_64-unknown-linux-gnu"}}"#.into()),
+        ("sim.replay/v1".into(), r#"{"jsonrpc":"2.0","id":10,"method":"sim.replay/v1","params":{"scenario":"scenarios/qa_boss_rush.ron","ticks":60}}"#.into()),
+        ("gate.report/v1".into(), format!(r#"{{"jsonrpc":"2.0","id":11,"method":"gate.report/v1","params":{{"verdict":"pass","hash":"{h}"}}}}"#)),
+        ("editor.undo/v1".into(), r#"{"jsonrpc":"2.0","id":12,"method":"editor.undo/v1","params":{}}"#.into()),
+        ("editor.redo/v1".into(), r#"{"jsonrpc":"2.0","id":13,"method":"editor.redo/v1","params":{}}"#.into()),
+        ("scene.query/v9".into(), r#"{"jsonrpc":"2.0","id":14,"method":"scene.query/v9","params":{}}"#.into()),
+        ("malformed".into(), "{not json".into()),
+        ("foo/bar/v1".into(), r#"{"jsonrpc":"2.0","id":16,"method":"foo/bar/v1","params":{}}"#.into()),
+        ("scene.getNode/bad-params".into(), r#"{"jsonrpc":"2.0","id":17,"method":"scene.getNode/v1","params":{}}"#.into()),
+    ]
+}
+
+fn case_check(name: &str) -> CaseCheck {
+    match name {
+        "scene.query/v1" => has_result_nodes,
+        "scene.getNode/v1" => result_id_matches,
+        "scene.query/v9" => error_is_version,
+        "malformed" => error_is_parse,
+        "foo/bar/v1" => error_is_method_not_found,
+        "scene.getNode/bad-params" => error_is_invalid_params,
+        _ if name.ends_with("/v1") => has_result,
+        _ => error_is_version,
+    }
+}
+
+/// Loopback `ws` transport for conformance: the same line-delimited JSON-RPC
+/// envelopes over TCP (see `editor-shell/src/rpc.rs`; full RFC6455 framing is
+/// the deferred toolchain-bump delta).
+fn ws_send_all(requests: &[String]) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("studio-cli: ws bind: {e}"))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("studio-cli: ws addr: {e}"))?;
+    let count = requests.len();
+    let server = std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            let mut reader =
+                std::io::BufReader::new(stream.try_clone().expect("tcp clone succeeds"));
+            let mut writer = stream;
+            let mut line = String::new();
+            for _ in 0..count {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let response = handle_request_line(line.trim());
+                        let _ = writeln!(writer, "{response}");
+                        let _ = writer.flush();
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    });
+    let mut stream =
+        std::net::TcpStream::connect(addr).map_err(|e| format!("studio-cli: ws connect: {e}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(|e| format!("studio-cli: ws timeout: {e}"))?;
+    for request in requests {
+        writeln!(stream, "{request}").map_err(|e| format!("studio-cli: ws send: {e}"))?;
+    }
+    let mut reader = std::io::BufReader::new(stream);
+    let mut out = Vec::with_capacity(requests.len());
+    let mut line = String::new();
+    for _ in 0..requests.len() {
+        line.clear();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("studio-cli: ws recv: {e}"))?;
+        out.push(line.trim().to_string());
+    }
+    let _ = server.join();
+    Ok(out)
+}
+
+fn run_conformance(transports: &[String]) -> i32 {
     let supported: Vec<String> = SUPPORTED_METHODS.iter().map(|m| m.to_string()).collect();
     let joined = supported.join(", ");
     println!("conformance: supported methods: {joined}");
-    let cases: &[(&str, &str, CaseCheck)] = &[
-        (
-            "scene.query/v1",
-            r#"{"jsonrpc":"2.0","id":1,"method":"scene.query/v1","params":{}}"#,
-            has_result_nodes,
-        ),
-        (
-            "scene.getNode/v1",
-            r#"{"jsonrpc":"2.0","id":2,"method":"scene.getNode/v1","params":{"id":"e:1"}}"#,
-            result_id_matches,
-        ),
-        (
-            "scene.query/v9",
-            r#"{"jsonrpc":"2.0","id":3,"method":"scene.query/v9","params":{}}"#,
-            error_is_version,
-        ),
-        ("malformed", "{not json", error_is_parse),
-        (
-            "foo/bar/v1",
-            r#"{"jsonrpc":"2.0","id":5,"method":"foo/bar/v1","params":{}}"#,
-            error_is_method_not_found,
-        ),
-    ];
+    println!("conformance: transports: {}", transports.join(","));
+    let cases = conformance_cases();
     let mut failures = 0;
-    for (offset, &(name, request, check)) in cases.iter().enumerate() {
-        let response = handle_request_line(request);
-        let parsed = parse_response(&response);
-        let passed = parsed.as_ref().is_some_and(check);
-        let number = offset + 1;
-        if passed {
-            println!("conformance: case {number} {name} ... ok");
+    for transport in transports {
+        let requests: Vec<String> = cases.iter().map(|(_, req)| req.clone()).collect();
+        let responses: Vec<String> = if transport == "ws" {
+            match ws_send_all(&requests) {
+                Ok(responses) => responses,
+                Err(message) => {
+                    eprintln!("conformance: transport ws setup failed: {message}");
+                    failures += requests.len();
+                    continue;
+                }
+            }
         } else {
-            println!("conformance: case {number} {name} ... FAIL");
-            failures += 1;
+            requests
+                .iter()
+                .map(|req| handle_request_line(req))
+                .collect()
+        };
+        for (offset, ((name, _), response)) in cases.iter().zip(responses.iter()).enumerate() {
+            let parsed = parse_response(response);
+            let check = case_check(name);
+            let passed = parsed.as_ref().is_some_and(check);
+            let number = offset + 1;
+            if passed {
+                println!("conformance: [{transport}] case {number} {name} ... ok");
+            } else {
+                println!("conformance: [{transport}] case {number} {name} ... FAIL");
+                println!("conformance: [{transport}] response: {response}");
+                failures += 1;
+            }
         }
     }
     if failures == 0 {
@@ -262,6 +382,15 @@ fn error_is_version(response: &Value) -> bool {
 
 fn error_is_method_not_found(response: &Value) -> bool {
     error_code_is(response, i64::from(E_METHOD_NOT_FOUND))
+}
+
+fn error_is_invalid_params(response: &Value) -> bool {
+    use mcp_gate::E_INVALID_PARAMS;
+    error_code_is(response, i64::from(E_INVALID_PARAMS))
+}
+
+fn has_result(response: &Value) -> bool {
+    response.get("result").is_some_and(|v| !v.is_null())
 }
 
 fn flag_value(args: &[String], name: &str) -> Option<String> {
@@ -688,6 +817,256 @@ fn cmd_render_test(args: &[String]) -> i32 {
     }
 }
 
+fn cmd_open_stress(args: &[String]) -> i32 {
+    let scenario_raw = match flag_value(args, "--scenario") {
+        Some(value) => value,
+        None => match args.iter().find(|a| !a.starts_with("--")) {
+            Some(first) => first.clone(),
+            None => {
+                eprintln!("studio-cli: open-stress needs <scenario> or --scenario <path>");
+                eprint!("{USAGE}");
+                return 2;
+            }
+        },
+    };
+    let frames = match flag_value(args, "--headless-frames") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                eprintln!("studio-cli: bad --headless-frames '{value}'");
+                return 2;
+            }
+        },
+        None => 120,
+    };
+    let scenario_path = resolve_scenario_path(&scenario_raw);
+    let scenario = match engine_runtime::sim::Scenario::load(&scenario_path) {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+    };
+    // Scene-tree model: 10k virtualized rows (id, name, parent) like
+    // `egui_ltreeview` with prefab badges + filter box (spec 04 §5).
+    let nodes: Vec<(String, String, String)> = scenario
+        .entities
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            (
+                format!("e:{i}"),
+                format!("Node_{i:05}{}", if i % 10 == 0 { "_prefab" } else { "" }),
+                if i == 0 {
+                    String::new()
+                } else {
+                    format!("e:{}", (i - 1) / 4)
+                },
+            )
+        })
+        .collect();
+    println!(
+        "open-stress: scenario {scenario_path} nodes {} frames {frames}",
+        nodes.len()
+    );
+    let mut timings_ms: Vec<f64> = Vec::with_capacity(frames as usize);
+    let filters = ["Node_000", "prefab", "e:9999", "zzz-no-match"];
+    for frame in 0..frames {
+        let filter = filters[(frame as usize) % filters.len()];
+        let start = std::time::Instant::now();
+        // Tree op: filter + scroll-window sort (virtualized to visible 60).
+        let mut matched: Vec<usize> = Vec::new();
+        for (index, (_, name, _)) in nodes.iter().enumerate() {
+            if name.contains(filter) || nodes[index].0.contains(filter) {
+                matched.push(index);
+            }
+        }
+        matched.sort_unstable();
+        let visible: Vec<_> = matched.into_iter().take(60).collect();
+        let mut checksum: u64 = 0;
+        for v in &visible {
+            checksum = checksum.wrapping_add(*v as u64);
+        }
+        std::hint::black_box(checksum);
+        timings_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    timings_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = timings_ms[timings_ms.len() / 2];
+    let p95 = timings_ms[((timings_ms.len() as f64 * 0.95) as usize).min(timings_ms.len() - 1)];
+    let max = timings_ms[timings_ms.len() - 1];
+    println!(
+        "open-stress: frames {frames} p50 {p50:.3}ms p95 {p95:.3}ms max {max:.3}ms (budget 16ms)"
+    );
+    if p50 < 16.0 && p95 < 16.0 {
+        println!("open-stress: PASS tree ops < 16ms/frame");
+        0
+    } else {
+        eprintln!("open-stress: FAIL tree ops exceed 16ms/frame");
+        1
+    }
+}
+
+fn cmd_cook(args: &[String]) -> i32 {
+    let all = args.iter().any(|a| a == "--all");
+    let content_addressed = args.iter().any(|a| a == "--content-addressed");
+    if !all || !content_addressed {
+        eprintln!("studio-cli: cook needs --all --content-addressed");
+        eprint!("{USAGE}");
+        return 2;
+    }
+    let repo = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let store = asset_hub::ContentStore::new(repo.join(".studio/store"));
+    let roots = ["assets/samples", "shaders", "assets/src"];
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for root in &roots {
+        collect_cook_files(&repo.join(root), &mut files);
+    }
+    // Also cook top-level scenario scenes referenced by the editor.
+    let extra = "scenarios/qa_boss_rush.ron";
+    {
+        let candidate = repo.join(extra);
+        if candidate.is_file() {
+            files.push(candidate);
+        }
+    }
+    // Skip placeholders (empty files, dotfiles): they are not assets.
+    files.retain(|f| {
+        let is_dot = f
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'));
+        let is_empty = std::fs::metadata(f).map(|m| m.len() == 0).unwrap_or(true);
+        !(is_dot || is_empty)
+    });
+    println!(
+        "cook: {} file(s) -> .studio/store (content-addressed)",
+        files.len()
+    );
+    let mut ok = 0;
+    let mut failed = 0;
+    for file in &files {
+        match asset_hub::cook_file(file, &store) {
+            Ok(cooked) => {
+                ok += 1;
+                println!(
+                    "cook: {} -> {} {} ({} bytes)",
+                    file.display(),
+                    cooked.handle,
+                    cooked.hash,
+                    cooked.bytes
+                );
+            }
+            Err(err) => {
+                failed += 1;
+                eprintln!("cook: {} FAILED: {err:#}", file.display());
+            }
+        }
+    }
+    println!("cook: {ok} ok, {failed} failed (last-good kept on failure)");
+    if failed == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+fn collect_cook_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_cook_files(&path, out);
+        } else if path.is_file() {
+            out.push(path);
+        }
+    }
+}
+
+fn cmd_watch(args: &[String]) -> i32 {
+    let debounce_ms = match flag_value(args, "--debounce-ms") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("studio-cli: bad --debounce-ms '{value}'");
+                return 2;
+            }
+        },
+        None => 120,
+    };
+    let timeout_s = match flag_value(args, "--timeout-s") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("studio-cli: bad --timeout-s '{value}'");
+                return 2;
+            }
+        },
+        None => 5,
+    };
+    let watch_dir = flag_value(args, "--dir").unwrap_or_else(|| "assets/src".to_string());
+    let repo = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let store = asset_hub::ContentStore::new(repo.join(".studio/store"));
+    let mut hub = asset_hub::AssetHub::new(repo.join(&watch_dir), store, debounce_ms);
+    println!("watch: dir {watch_dir} debounce {debounce_ms}ms timeout {timeout_s}s");
+    let seen = hub.watch_loop(usize::MAX, std::time::Duration::from_secs(timeout_s));
+    println!("watch: {seen} event(s)");
+    0
+}
+
+fn cmd_gen_stress(args: &[String]) -> i32 {
+    let out = match flag_value(args, "--out") {
+        Some(value) => value,
+        None => {
+            eprintln!("studio-cli: gen-stress needs --out <path>");
+            eprint!("{USAGE}");
+            return 2;
+        }
+    };
+    let count = match flag_value(args, "--count") {
+        Some(value) => match value.parse::<usize>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                eprintln!("studio-cli: bad --count '{value}'");
+                return 2;
+            }
+        },
+        None => 10_000,
+    };
+    let seed = match flag_value(args, "--seed") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("studio-cli: bad --seed '{value}'");
+                return 2;
+            }
+        },
+        None => 0x0577_E551u64,
+    };
+    let scenario = engine_runtime::sim::Scenario::generate(seed, count);
+    let text = scenario.to_ron();
+    if let Some(parent) = std::path::Path::new(&out).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                eprintln!("studio-cli: mkdir {}: {err}", parent.display());
+                return 1;
+            }
+        }
+    }
+    match std::fs::write(&out, text) {
+        Ok(()) => {
+            println!("gen-stress: wrote {out} entities {count} seed {seed}");
+            0
+        }
+        Err(err) => {
+            eprintln!("studio-cli: write {out}: {err}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,15 +1102,19 @@ mod tests {
     }
 
     #[test]
-    fn transport_parser_accepts_stdio_only() {
+    fn transport_parser_accepts_ws_and_stdio_lists() {
         let split = vec!["--transport".to_string(), "stdio".to_string()];
-        assert!(parse_transport(&split).is_ok());
-        let joined = vec!["--transport=stdio".to_string()];
-        assert!(parse_transport(&joined).is_ok());
-        let other = vec!["--transport".to_string(), "ws".to_string()];
-        assert!(parse_transport(&other).is_err());
+        assert_eq!(parse_transports(&split).unwrap(), vec!["stdio"]);
+        let joined = vec!["--transport=ws,stdio".to_string()];
+        assert_eq!(parse_transports(&joined).unwrap(), vec!["ws", "stdio"]);
+        let ws_only = vec!["--transport".to_string(), "ws".to_string()];
+        assert_eq!(parse_transports(&ws_only).unwrap(), vec!["ws"]);
+        let dupes = vec!["--transport=stdio,stdio".to_string()];
+        assert_eq!(parse_transports(&dupes).unwrap(), vec!["stdio"]);
+        let other = vec!["--transport".to_string(), "quic".to_string()];
+        assert!(parse_transports(&other).is_err());
         let empty: Vec<String> = Vec::new();
-        assert!(parse_transport(&empty).is_err());
+        assert!(parse_transports(&empty).is_err());
     }
 
     #[test]

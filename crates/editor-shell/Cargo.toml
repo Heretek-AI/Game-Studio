@@ -10,3 +10,12 @@ name = "editor-shell"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+ron.workspace = true
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+mcp-gate = { path = "../mcp-gate" }
+asset-hub = { path = "../asset-hub" }
+engine-runtime = { path = "../engine-runtime" }

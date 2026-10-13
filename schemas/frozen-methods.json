@@ -1,0 +1,1 @@
+{"frozen_at_phase":3,"methods":["asset.changed/v1","asset.import/v1","asset.list/v1","asset.reload/v1","build.run/v1","editor.redo/v1","editor.undo/v1","gate.report/v1","graph.evalNode/v1","scene.applyPatch/v1","scene.getNode/v1","scene.query/v1","sim.replay/v1"]}

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/scene.applyPatch/v1.json",
+  "title": "scene.applyPatch",
+  "description": "JSON-RPC 2.0 method scene.applyPatch/v1 params+result envelopes. Spec 04 section 2.",
+  "type": "object",
+  "properties": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "patch": {
+          "$ref": "levelpatch.json"
+        },
+        "base_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "staging_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "patch",
+        "base_hash",
+        "staging_hash"
+      ],
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "applied_ops": {
+          "type": "integer"
+        },
+        "new_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "applied",
+        "applied_ops",
+        "new_hash"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "params",
+    "result"
+  ],
+  "additionalProperties": true
+}

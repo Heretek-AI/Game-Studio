@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/layout/v1.json",
+  "title": "EditorLayout",
+  "description": "Dock layout persistence (spec 04 section 5). Corrupt layout falls back to safe default, never a crash.",
+  "type": "object",
+  "properties": {
+    "viewport_center": {
+      "const": true
+    },
+    "left": {
+      "type": "string"
+    },
+    "right": {
+      "type": "string"
+    },
+    "bottom": {
+      "type": "string"
+    },
+    "tabs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "viewport_center"
+  ],
+  "additionalProperties": true
+}

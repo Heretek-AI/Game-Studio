@@ -1,12 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/levelpatch/v1.json",
   "title": "LevelPatch",
+  "description": "The ONLY mutating scene path (spec 04 §2). All clients incl. agents go through scene.applyPatch/v1.",
   "type": "object",
   "properties": {
     "ops": {
       "type": "array",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object",
+        "properties": {
+          "op": { "type": "string", "enum": ["addEntity", "setComponent", "removeEntity"] },
+          "id": { "type": "string", "pattern": "^e:[A-Za-z0-9_:-]+$" },
+          "component": { "type": "string" },
+          "value": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+          "components": { "type": "object" }
+        },
+        "required": ["op", "id"],
+        "additionalProperties": true
+      }
     }
   },
-  "required": ["ops"]
+  "required": ["ops"],
+  "additionalProperties": false
 }

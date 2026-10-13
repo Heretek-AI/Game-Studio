@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-studio.heretek.ai/schemas/rpc-manifest/v1.json",
+  "title": "FrozenRpcSurface",
+  "description": "Phase-3 frozen RPC surface (spec 04 section 2, ADR phase3-egui-vs-react). No ad-hoc methods.",
+  "type": "object",
+  "properties": {
+    "methods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 13,
+      "maxItems": 13
+    },
+    "frozen_at_phase": {
+      "const": 3
+    }
+  },
+  "required": [
+    "methods",
+    "frozen_at_phase"
+  ],
+  "additionalProperties": false
+}

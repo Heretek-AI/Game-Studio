@@ -5,6 +5,9 @@
 # Content-addressed render caches (reproducible from shaders/; spec 03 §3)
 .studio/pso/
 .studio/shader-out/
+# Content-addressed asset store (reproducible via `studio-cli cook --all
+# --content-addressed`; spec 04 §6)
+.studio/store/
 # Pinned Slang toolchain (reproducible via tools/fetch-slang.sh + flake.nix)
 tools/slang-2025.12/
 # Packager output (Phase 5)
