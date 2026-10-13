@@ -1,0 +1,10 @@
+(
+    name: "sponza_lite",
+    kind: "forward_plus_proxy",
+    description: "Phase 2 lite atrium proxy: procedural gradient + 8x6 column grid with 256 punctual-light shimmer. Full Sponza glTF lands in Phase 3 with the asset cooker; this proxy exercises the same FrameGraph order headless.",
+    resolution: (320, 180),
+    punctual_lights: 256,
+    cluster_grid: (16, 9, 24),
+    frames_default: 60,
+    variants: ["DEFAULT", "SUBGROUPS_OFF"],
+)

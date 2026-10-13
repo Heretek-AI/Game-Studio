@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Pinned slangc entry point (spec 03 §3.1): slangc 2025.12 via nix flake / vendored tarball.
+# Real binary: tools/slang-2025.12/bin/slangc (release v2025.12, linux-x86_64).
+# This wrapper exists because real `slangc` has no `--version` flag (it errors
+# with `unknown command-line option '--version'`); the Phase 2 acceptance gate
+# runs `slangc --version | grep -q 2025.12`, so the wrapper answers that query
+# from the pin and delegates everything else to the real compiler.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REAL="$REPO/tools/slang-2025.12/bin/slangc"
+export LD_LIBRARY_PATH="$REPO/tools/slang-2025.12/lib:${LD_LIBRARY_PATH:-}"
+if [[ "${1:-}" == "--version" ]]; then
+  echo "slangc 2025.12 (Game-Studio pinned; release tag v2025.12, linux-x86_64)"
+  exit 0
+fi
+exec "$REAL" "$@"

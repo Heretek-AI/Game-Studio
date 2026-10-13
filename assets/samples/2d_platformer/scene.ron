@@ -1,0 +1,9 @@
+(
+    name: "2d_platformer",
+    kind: "sprite_batch_proxy",
+    description: "Phase 2 2D proxy: sky gradient + tile checker ground + player quad on sine path. Instanced sprite batch (shaders/sprite.slang) lands headless via the same procedural backend.",
+    resolution: (320, 180),
+    sprites: 240,
+    frames_default: 120,
+    variants: ["DEFAULT", "SUBGROUPS_OFF"],
+)

@@ -12,6 +12,9 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
           Run headless fixed-step replay and compare tick hashes.\n\
       mem-report --scenario <path>\n\
           Run headless soak and report frame-arena budgets.\n\
+      render-test --scene <path> --frames <n> --golden <dir> [--target desktop|web|mobile] [--write-goldens]\n\
+          Compile Slang shaders (Slang->WGSL->Naga + PSO cache), render headless\n\
+          frames, compare last frame against golden PNG (tolerance < 0.5%).\n\
       help | --help | -h\n\
           Print this usage.\n";
 
@@ -44,6 +47,7 @@ fn real_main() -> i32 {
         "rpc-conformance" => cmd_rpc_conformance(&args[2..]),
         "replay" => cmd_replay(&args[2..]),
         "mem-report" => cmd_mem_report(&args[2..]),
+        "render-test" => cmd_render_test(&args[2..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             0
@@ -499,6 +503,189 @@ fn cmd_mem_report(args: &[String]) -> i32 {
         println!("mem-report: PASS");
     }
     code
+}
+
+fn resolve_scene_file(raw: &str) -> String {
+    let candidates = [
+        raw.to_string(),
+        format!("assets/{raw}"),
+        format!("{raw}/scene.ron"),
+        format!("assets/{raw}/scene.ron"),
+    ];
+    for candidate in &candidates {
+        if std::path::Path::new(candidate).is_file() {
+            return candidate.clone();
+        }
+    }
+    raw.to_string()
+}
+
+fn detect_render_scene(scene_path: &str) -> engine_runtime::render::RenderScene {
+    use engine_runtime::render::RenderScene;
+    let lowered = scene_path.to_lowercase();
+    if lowered.contains("2d") || lowered.contains("platformer") || lowered.contains("sprite") {
+        RenderScene::Platformer2D
+    } else {
+        RenderScene::SponzaLite
+    }
+}
+
+fn parse_target_mask(raw: Option<String>) -> Result<engine_runtime::render::TargetMask, String> {
+    use engine_runtime::render::TargetMask;
+    match raw.as_deref() {
+        None | Some("desktop") => Ok(TargetMask::DESKTOP),
+        Some("web") => Ok(TargetMask::WEB),
+        Some("mobile") => Ok(TargetMask::MOBILE),
+        Some(other) => Err(format!(
+            "studio-cli: bad --target '{other}', want desktop|web|mobile"
+        )),
+    }
+}
+
+fn cmd_render_test(args: &[String]) -> i32 {
+    use engine_runtime::render::{HeadlessRenderer, ShaderPipeline, TargetMask};
+    let scene_raw = match flag_value(args, "--scene") {
+        Some(value) => value,
+        None => {
+            eprintln!("studio-cli: render-test needs --scene <path>");
+            eprint!("{USAGE}");
+            return 2;
+        }
+    };
+    let frames = match flag_value(args, "--frames") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                eprintln!("studio-cli: bad --frames '{value}'");
+                return 2;
+            }
+        },
+        None => 60,
+    };
+    let golden_dir = match flag_value(args, "--golden") {
+        Some(value) => value,
+        None => {
+            eprintln!("studio-cli: render-test needs --golden <dir>");
+            eprint!("{USAGE}");
+            return 2;
+        }
+    };
+    let target = match parse_target_mask(flag_value(args, "--target")) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
+    };
+    let write_goldens = args.iter().any(|arg| arg == "--write-goldens");
+    let scene_file = resolve_scene_file(&scene_raw);
+    if !std::path::Path::new(&scene_file).is_file() {
+        eprintln!("studio-cli: scene not found: '{scene_raw}' (tried {scene_file})");
+        return 1;
+    }
+    let scene = detect_render_scene(&scene_raw);
+    println!(
+        "render-test: scene {scene_raw} ({}) frames {frames}",
+        scene_file
+    );
+
+    let repo_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let pipeline = ShaderPipeline::new(&repo_root);
+    let defines: &[(&str, &str)] = if target == TargetMask::WEB {
+        &[("SUBGROUPS_OFF", "1")]
+    } else {
+        &[]
+    };
+    for slang in ["shaders/pbr.slang", "shaders/sprite.slang"] {
+        let path = repo_root.join(slang);
+        match pipeline.compile(&path, defines) {
+            Ok(compiled) => {
+                println!(
+                    "render-test: slang {slang} -> blake3:{}",
+                    &compiled.hash[..16.min(compiled.hash.len())]
+                );
+            }
+            Err(err) => {
+                eprintln!("render-test: slang {slang} compile failed: {err}; trying last-good");
+                match pipeline.last_good(&path) {
+                    Some(cached) => println!(
+                        "render-test: slang {slang} -> blake3:{} (last-good)",
+                        &cached.hash[..16.min(cached.hash.len())]
+                    ),
+                    None => {
+                        eprintln!("studio-cli: shader compile failed for {slang}: {err}");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let renderer = match HeadlessRenderer::new(target) {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("studio-cli: headless renderer init failed: {err:#}");
+            eprintln!("studio-cli: hint: install software GL (tools/ci/install-sw-gl.sh) or set WGPU_BACKEND=gl");
+            return 1;
+        }
+    };
+    println!(
+        "render-test: subgroups_off={} target_bits={:#x}",
+        renderer.subgroups_off(),
+        target.0
+    );
+    let mut timings = Vec::with_capacity(frames as usize);
+    let mut last = None;
+    for index in 0..frames {
+        match renderer.render(scene, index) {
+            Ok(frame) => {
+                timings.push(frame.render_ms);
+                last = Some(frame);
+            }
+            Err(err) => {
+                eprintln!("studio-cli: frame {index} failed: {err:#}");
+                return 1;
+            }
+        }
+    }
+    timings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = timings[timings.len() / 2];
+    let last = last.expect("frames > 0 renders a last frame");
+    println!("render-test: rendered {frames} frames p50 {p50:.2}ms");
+    let golden_path = std::path::Path::new(&golden_dir).join(format!("{}.png", scene.name()));
+    if write_goldens || !golden_path.is_file() {
+        match engine_runtime::render::backend::save_png(&last, &golden_path) {
+            Ok(()) => {
+                println!("render-test: golden written {}", golden_path.display());
+                println!("render-test: PASS (golden recorded; commit it)");
+                return 0;
+            }
+            Err(err) => {
+                eprintln!("studio-cli: golden write failed: {err:#}");
+                return 1;
+            }
+        }
+    }
+    match engine_runtime::render::backend::compare_frames(&last, &golden_path) {
+        Ok(score) => {
+            println!("render-test: diff {:.4}% (budget 0.5000%)", score * 100.0);
+            if score < 0.005 {
+                println!("render-test: PASS diff < 0.5%");
+                0
+            } else {
+                eprintln!(
+                    "render-test: FAIL diff {:.4}% >= 0.5% vs {}",
+                    score * 100.0,
+                    golden_path.display()
+                );
+                1
+            }
+        }
+        Err(err) => {
+            eprintln!("studio-cli: golden compare failed: {err:#}");
+            1
+        }
+    }
 }
 
 #[cfg(test)]

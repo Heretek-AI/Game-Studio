@@ -22,7 +22,7 @@
 
 - [x] **Phase 0 — Bootstrap & Core Shell** (spec 08): workspace builds, `studio check` + `rpc-conformance` green, `cargo-deny` clean, zero AI deps in runtime tree.
 - [x] **Phase 1 — Minimal Headless Engine** (specs 01/06): fixed-step ECS + Rapier + 3600-tick replay hash matches `hashes.lock`; benches (`ecs_sparse`, `mem-report`) within budget.
-- [ ] **Phase 2 — Render Graph & Viewport** (spec 03): Forward+ on `wgpu`, shader edit→pixels < 200 ms, software-GL goldens < 0.5% diff.
+- [x] **Phase 2 — Render Graph & Viewport** (spec 03): Forward+ on `wgpu`, shader edit→pixels < 200 ms, software-GL goldens < 0.5% diff.
 - [ ] **Phase 3 — Editor Shell & IPC Bus** (spec 04): cold open < 3 s, 10k-node tree < 16 ms/frame, undo ×100 zero-mismatch, RPC conformance over ws+stdio; `egui`-vs-React decision ADR recorded.
 - [ ] **Phase 4 — Agent Loop & Gates** (spec 05): demo agent-built level in < 5 min with zero bypasses; G1–G5 negative fixtures all reject with structured errors; reject-rate reported.
 - [ ] **Phase 5 — Scripting & Packager** (spec 06): hot-swap < 100 ms, Wasm round-trip ≤ 1 ms @ 5k, desktop + Wasm + Android artifacts play headless; `--no-ai-sidecars` builds clean.

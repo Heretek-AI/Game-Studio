@@ -22,6 +22,20 @@ petgraph = { version = "=0.6.5" }
 tracy-client = { version = "=0.18.0", optional = true }
 ron = { version = "=0.8.1" }
 anyhow = { version = "=1.0.98" }
+# Phase 2 render graph (spec 03): wgpu portable base + Slang->WGSL->Naga triple.
+# MSRV pins (Rust 1.82.0): indexmap/hashbrown/ahash constrain the resolver away
+# from edition2024 transitives (hashbrown 0.17.x, moxcms 0.8.x); image is
+# png-only to avoid heavy/MRSV-risky codecs. bevy_render 0.15 (wgpu 23 tree)
+# is intentionally NOT linked in Phase 2 — the graph is bevy_render-compatible
+# without forking the GPU closure (see shaders/COMPAT.md).
+wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl"] }
+naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in", "wgsl-out"] }
+pollster = { version = "=0.3.0" }
+image = { version = "=0.25.2", default-features = false, features = ["png"] }
+image-compare = { version = "=0.4.2" }
+indexmap = { version = "=2.6.0" }
+hashbrown = { version = "=0.15.5" }
+ahash = { version = "=0.8.11" }
 
 [features]
 default = ["rollback"]
