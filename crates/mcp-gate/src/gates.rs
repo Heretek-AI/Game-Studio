@@ -16,6 +16,107 @@ use std::time::Instant;
 pub const GATE_BUDGET_MS: u64 = 60_000;
 pub const MAX_OPS: usize = 4096;
 
+/// Pinned reference binaries for the G1/G2 passthrough (spec 05 §4).
+/// When the binary is present **and** reports the pinned version, gates
+/// may shell out; otherwise they use the native validator and record a
+/// `tool_fallback` transcript row. The [`SingleGate`] `command` row always
+/// carries the reference command either way.
+pub const TREE_SITTER_BIN: &str = "tree-sitter";
+pub const TREE_SITTER_WANT: &str = "0.24.7";
+pub const DENO_BIN: &str = "deno";
+pub const DENO_WANT: &str = "2.1.4";
+
+/// Where a reference tool runs: real binary passthrough or native fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolRoute {
+    /// Binary present with the pinned version; caller may shell out.
+    Passthrough { version: String },
+    /// Missing binary or version mismatch; native validator applies.
+    NativeFallback { found: String, wanted: String },
+}
+
+impl ToolRoute {
+    /// True when the reference binary should handle this gate.
+    pub fn is_passthrough(&self) -> bool {
+        matches!(self, Self::Passthrough { .. })
+    }
+}
+
+/// Extract the first `X.Y[.Z...]` token from `--version` output.
+/// Accepts a leading `v` (`v2.1.4`, `tree-sitter 0.24.7`, `deno 2.1.4`).
+pub fn parse_tool_version(output: &str) -> Option<String> {
+    for token in output.split_whitespace() {
+        let t = token
+            .trim()
+            .trim_start_matches('v')
+            .trim_matches([',', ')', '(']);
+        if t.contains('.')
+            && !t.is_empty()
+            && t.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+            && t.bytes().any(|b| b.is_ascii_digit())
+        {
+            let parts: Vec<&str> = t.split('.').collect();
+            if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty()) {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Pure version-gate: exact match passes through, anything else
+/// (missing binary, unparseable output, mismatch) falls back.
+pub fn resolve_tool_route(found: Option<&str>, wanted: &str) -> ToolRoute {
+    match found {
+        Some(v) if v == wanted => ToolRoute::Passthrough {
+            version: v.to_string(),
+        },
+        Some(v) => ToolRoute::NativeFallback {
+            found: v.to_string(),
+            wanted: wanted.to_string(),
+        },
+        None => ToolRoute::NativeFallback {
+            found: "missing".to_string(),
+            wanted: wanted.to_string(),
+        },
+    }
+}
+
+/// Probe `<bin> --version`; returns the parsed version or `None` when the
+/// binary is absent, fails, or prints nothing parseable.
+pub fn try_tool_version(bin: &str) -> Option<String> {
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    parse_tool_version(&text)
+}
+
+/// Probe the binary and apply the pinned-version gate.
+pub fn tool_route(bin: &str, wanted: &str) -> ToolRoute {
+    let found = try_tool_version(bin);
+    resolve_tool_route(found.as_deref(), wanted)
+}
+
+/// Record a `tool_fallback` transcript row for a version mismatch / missing
+/// binary. Returns true when a row was appended. I/O errors are ignored so
+/// gating stays deterministic on read-only staging dirs.
+pub fn note_tool_fallback(ctx: &mut AgentCtx, tool: &str, route: &ToolRoute) -> bool {
+    if let ToolRoute::NativeFallback { found, wanted } = route {
+        let detail = format!("{tool}: found {found} wanted {wanted} native-fallback");
+        let hash = format!("blake3:{}", blake3::hash(detail.as_bytes()).to_hex());
+        let _ = ctx.transcript.append("tool_fallback", &hash);
+        true
+    } else {
+        false
+    }
+}
+
 /// One gate row in a [`GateReport`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SingleGate {
@@ -591,6 +692,15 @@ pub fn run_all_gates(
     let mut gates: Vec<SingleGate> = Vec::new();
     let mut failed: Option<GateError> = None;
 
+    // Phase 8.3 passthrough: prefer the pinned tree-sitter/deno binaries,
+    // fall back to the native validators on version mismatch (or missing
+    // binary) and leave a `tool_fallback` transcript row. Gate rows keep
+    // the reference `command` either way.
+    let ts_route = tool_route(TREE_SITTER_BIN, TREE_SITTER_WANT);
+    let deno_route = tool_route(DENO_BIN, DENO_WANT);
+    note_tool_fallback(ctx, TREE_SITTER_BIN, &ts_route);
+    note_tool_fallback(ctx, DENO_BIN, &deno_route);
+
     // G1 — parse (validates raw text; borrows nothing on failure path).
     let parsed = {
         let started = Instant::now();
@@ -962,6 +1072,48 @@ mod tests {
                 GateVerdict::Approve { .. } => panic!("must reject"),
             }
         }
+    }
+
+    #[test]
+    fn version_mismatch_falls_back_with_transcript_row() {
+        assert_eq!(
+            resolve_tool_route(Some("0.24.7"), "0.24.7"),
+            ToolRoute::Passthrough {
+                version: "0.24.7".to_string()
+            }
+        );
+        assert!(resolve_tool_route(Some("0.24.7"), "0.24.7").is_passthrough());
+        let mismatched = resolve_tool_route(Some("0.22.0"), "0.24.7");
+        assert!(!mismatched.is_passthrough());
+        let missing = resolve_tool_route(None, "2.1.4");
+        assert!(!missing.is_passthrough());
+        assert_eq!(
+            parse_tool_version("tree-sitter 0.24.7"),
+            Some("0.24.7".to_string())
+        );
+        assert_eq!(parse_tool_version("deno v2.1.4"), Some("2.1.4".to_string()));
+        assert_eq!(parse_tool_version("no version here"), None);
+
+        let mut ctx = test_ctx("fallback-row");
+        let before = crate::policy::read_transcript(ctx.transcript.path()).len();
+        assert!(note_tool_fallback(&mut ctx, "tree-sitter", &mismatched));
+        assert!(!note_tool_fallback(
+            &mut ctx,
+            "deno",
+            &ToolRoute::Passthrough {
+                version: "2.1.4".to_string()
+            }
+        ));
+        let rows = crate::policy::read_transcript(ctx.transcript.path());
+        assert_eq!(rows.len(), before + 1);
+        assert_eq!(rows[rows.len() - 1].kind, "tool_fallback");
+
+        // Full runner keeps reference commands while noting the fallback.
+        let mut ctx = test_ctx("fallback-gates");
+        let raw = demo_level_patch();
+        let report = run_all_gates(&mut ctx, &raw, "patch.json", &[], || Ok(green_replay()));
+        assert!(report.gates[0].command.starts_with("tree-sitter parse "));
+        assert!(report.gates[1].command.contains("deno check --no-npm"));
     }
 
     #[test]

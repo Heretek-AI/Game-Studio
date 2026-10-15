@@ -17,7 +17,7 @@ const USAGE: &str = "usage: studio-cli <command> [options]\n\
           Run headless fixed-step replay and compare tick hashes.\n\
       mem-report --scenario <path>\n\
           Run headless soak and report frame-arena budgets.\n\
-      render-test --scene <path> --frames <n> --golden <dir> [--target desktop|web|mobile] [--write-goldens]\n\
+      render-test --scene <path> --frames <n> --golden <dir> [--target desktop|web|mobile] [--width <px> --height <px> --no-fallback] [--write-goldens]\n\
           Compile Slang shaders (Slang->WGSL->Naga + PSO cache), render headless\n\
           frames, compare last frame against golden PNG (tolerance < 0.5%).\n\
       open-stress <scenario> --headless-frames <n>\n\
@@ -672,6 +672,7 @@ fn parse_target_mask(raw: Option<String>) -> Result<engine_runtime::render::Targ
 }
 
 fn cmd_render_test(args: &[String]) -> i32 {
+    use engine_runtime::render::backend::RenderHarnessOptions;
     use engine_runtime::render::{HeadlessRenderer, ShaderPipeline, TargetMask};
     let scene_raw = match flag_value(args, "--scene") {
         Some(value) => value,
@@ -707,6 +708,20 @@ fn cmd_render_test(args: &[String]) -> i32 {
         }
     };
     let write_goldens = args.iter().any(|arg| arg == "--write-goldens");
+    let width_raw = flag_value(args, "--width");
+    let height_raw = flag_value(args, "--height");
+    let no_fallback = args.iter().any(|arg| arg == "--no-fallback");
+    let harness = match RenderHarnessOptions::from_harness_flags(
+        width_raw.as_deref(),
+        height_raw.as_deref(),
+        no_fallback,
+    ) {
+        Ok(options) => options,
+        Err(err) => {
+            eprintln!("studio-cli: {err:#}");
+            return 2;
+        }
+    };
     let scene_file = resolve_scene_file(&scene_raw);
     if !std::path::Path::new(&scene_file).is_file() {
         eprintln!("studio-cli: scene not found: '{scene_raw}' (tried {scene_file})");
@@ -750,7 +765,7 @@ fn cmd_render_test(args: &[String]) -> i32 {
         }
     }
 
-    let renderer = match HeadlessRenderer::new(target) {
+    let renderer = match HeadlessRenderer::new_with_options(target, harness) {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!("studio-cli: headless renderer init failed: {err:#}");
@@ -759,9 +774,12 @@ fn cmd_render_test(args: &[String]) -> i32 {
         }
     };
     println!(
-        "render-test: subgroups_off={} target_bits={:#x}",
+        "render-test: subgroups_off={} target_bits={:#x} extent={}x{} no_fallback={}",
         renderer.subgroups_off(),
-        target.0
+        target.0,
+        renderer.width(),
+        renderer.height(),
+        renderer.no_fallback()
     );
     let mut timings = Vec::with_capacity(frames as usize);
     let mut last = None;

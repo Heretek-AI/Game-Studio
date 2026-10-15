@@ -23,6 +23,96 @@ impl RenderScene {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderHarnessOptions {
+    pub width: u32,
+    pub height: u32,
+    pub no_fallback: bool,
+}
+
+/// Default headless harness extent (matches historical `HeadlessRenderer::new`).
+pub const DEFAULT_HARNESS_WIDTH: u32 = 320;
+/// Default headless harness extent (matches historical `HeadlessRenderer::new`).
+pub const DEFAULT_HARNESS_HEIGHT: u32 = 180;
+/// Upper bound for `--width`/`--height` (covers native 1440p + 4K harness runs).
+pub const MAX_HARNESS_WIDTH: u32 = 3840;
+/// Upper bound for `--width`/`--height` (covers native 1440p + 4K harness runs).
+pub const MAX_HARNESS_HEIGHT: u32 = 2160;
+
+impl Default for RenderHarnessOptions {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_HARNESS_WIDTH,
+            height: DEFAULT_HARNESS_HEIGHT,
+            no_fallback: false,
+        }
+    }
+}
+
+impl RenderHarnessOptions {
+    /// Validated constructor shared by the `render-test --width/--height/--no-fallback` path.
+    pub fn new(width: u32, height: u32, no_fallback: bool) -> anyhow::Result<Self> {
+        if width == 0 || width > MAX_HARNESS_WIDTH {
+            anyhow::bail!("bad --width '{width}': want 1..={}", MAX_HARNESS_WIDTH);
+        }
+        if height == 0 || height > MAX_HARNESS_HEIGHT {
+            anyhow::bail!("bad --height '{height}': want 1..={}", MAX_HARNESS_HEIGHT);
+        }
+        Ok(Self {
+            width,
+            height,
+            no_fallback,
+        })
+    }
+
+    /// Parse a `--width` flag value.
+    pub fn parse_width(raw: &str) -> anyhow::Result<u32> {
+        match raw.parse::<u32>() {
+            Ok(width) if width > 0 && width <= MAX_HARNESS_WIDTH => Ok(width),
+            _ => anyhow::bail!("bad --width '{raw}': want 1..={}", MAX_HARNESS_WIDTH),
+        }
+    }
+
+    /// Parse a `--height` flag value.
+    pub fn parse_height(raw: &str) -> anyhow::Result<u32> {
+        match raw.parse::<u32>() {
+            Ok(height) if height > 0 && height <= MAX_HARNESS_HEIGHT => Ok(height),
+            _ => anyhow::bail!("bad --height '{raw}': want 1..={}", MAX_HARNESS_HEIGHT),
+        }
+    }
+
+    /// Build options from `render-test` harness flags.
+    ///
+    /// `width`/`height` are the raw `--width`/`--height` values (None = default);
+    /// `no_fallback` is whether `--no-fallback` was passed.
+    pub fn from_harness_flags(
+        width: Option<&str>,
+        height: Option<&str>,
+        no_fallback: bool,
+    ) -> anyhow::Result<Self> {
+        let width = match width {
+            Some(raw) => Self::parse_width(raw)?,
+            None => DEFAULT_HARNESS_WIDTH,
+        };
+        let height = match height {
+            Some(raw) => Self::parse_height(raw)?,
+            None => DEFAULT_HARNESS_HEIGHT,
+        };
+        Self::new(width, height, no_fallback)
+    }
+
+    /// Extent as `(width, height)`.
+    pub fn dimensions(self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Value to pass as `force_fallback_adapter` when requesting a wgpu adapter.
+    /// `--no-fallback` disables the software-fallback adapter.
+    pub fn force_fallback_adapter(self) -> bool {
+        !self.no_fallback
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderFrame {
     pub width: u32,
@@ -98,13 +188,21 @@ pub struct HeadlessRenderer {
     width: u32,
     height: u32,
     subgroups_off: bool,
+    no_fallback: bool,
 }
 
 impl HeadlessRenderer {
     pub fn new(target: TargetMask) -> anyhow::Result<Self> {
+        Self::new_with_options(target, RenderHarnessOptions::default())
+    }
+
+    /// Harness constructor for the `render-test --width/--height/--no-fallback` path.
+    pub fn new_with_options(
+        target: TargetMask,
+        options: RenderHarnessOptions,
+    ) -> anyhow::Result<Self> {
         profile_span!("render");
-        let width = 320;
-        let height = 180;
+        let (width, height) = options.dimensions();
         let subgroups_off = target.intersects(TargetMask::WEB);
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -113,7 +211,7 @@ impl HeadlessRenderer {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: None,
-            force_fallback_adapter: true,
+            force_fallback_adapter: options.force_fallback_adapter(),
         }))
         .ok_or_else(|| anyhow::anyhow!("no wgpu adapter (set WGPU_BACKEND=gl for software GL)"))?;
         let (device, queue) = pollster::block_on(adapter.request_device(
@@ -202,6 +300,7 @@ impl HeadlessRenderer {
             view_formats: &[],
         });
         let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let no_fallback = options.no_fallback;
         Ok(Self {
             device,
             queue,
@@ -213,11 +312,32 @@ impl HeadlessRenderer {
             width,
             height,
             subgroups_off,
+            no_fallback,
         })
     }
 
     pub fn subgroups_off(&self) -> bool {
         self.subgroups_off
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn no_fallback(&self) -> bool {
+        self.no_fallback
+    }
+
+    pub fn harness_options(&self) -> RenderHarnessOptions {
+        RenderHarnessOptions {
+            width: self.width,
+            height: self.height,
+            no_fallback: self.no_fallback,
+        }
     }
 
     pub fn render(&self, scene: RenderScene, frame_index: u64) -> anyhow::Result<RenderFrame> {
@@ -436,5 +556,41 @@ mod tests {
             "identical frames must score diff < 0.5%, got {diff}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn harness_options_default_matches_legacy_extent() {
+        let options = RenderHarnessOptions::default();
+        assert_eq!(options.width, DEFAULT_HARNESS_WIDTH);
+        assert_eq!(options.height, DEFAULT_HARNESS_HEIGHT);
+        assert_eq!((options.width, options.height), (320, 180));
+        assert!(!options.no_fallback);
+        assert!(options.force_fallback_adapter());
+        assert_eq!(options.dimensions(), (320, 180));
+    }
+
+    #[test]
+    fn harness_options_from_flags_round_trips() {
+        let options = RenderHarnessOptions::from_harness_flags(Some("640"), Some("360"), true)
+            .expect("valid flags");
+        assert_eq!(options.dimensions(), (640, 360));
+        assert!(options.no_fallback);
+        assert!(!options.force_fallback_adapter());
+
+        let defaults =
+            RenderHarnessOptions::from_harness_flags(None, None, false).expect("defaults");
+        assert_eq!(defaults, RenderHarnessOptions::default());
+    }
+
+    #[test]
+    fn harness_options_rejects_bad_extents() {
+        assert!(RenderHarnessOptions::new(0, 180, false).is_err());
+        assert!(RenderHarnessOptions::new(320, 0, false).is_err());
+        assert!(RenderHarnessOptions::parse_width("0").is_err());
+        assert!(RenderHarnessOptions::parse_height("0").is_err());
+        assert!(RenderHarnessOptions::parse_width("abc").is_err());
+        assert!(RenderHarnessOptions::parse_height("-1").is_err());
+        assert!(RenderHarnessOptions::from_harness_flags(Some("99999"), None, false).is_err());
+        assert!(RenderHarnessOptions::from_harness_flags(None, Some("99999"), false).is_err());
     }
 }

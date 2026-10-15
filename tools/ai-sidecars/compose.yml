@@ -1,7 +1,7 @@
 # AI sidecars are loopback-only containers; never workspace dependencies (spec 00 P6).
 # Phase 4: llama.cpp + Ollama over loopback OpenAI-compat HTTP (spec 05 §5).
-# Models are BYOK: place a GGUF at ./models/ (gitignored) or point the
-# services at your weights; the engine never links these images.
+# Models are BYOK via ${LLAMA_MODEL} (host path mounted at /models/, contents
+# gitignored — no weight is committed); the engine never links these images.
 #
 # Tag notes (probed 2026-10-13, recorded in docs/perf/phase4.md):
 # - spec 05 §5 pins llama.cpp `server-b6032`; that build tag is pruned
@@ -13,7 +13,7 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server@sha256:c789283572ba78c2699b8945a96e654c850f938a717883f2e6187a14adac698f
     command:
       - "-m"
-      - "/models/qwen2.5-coder-7b-q4_k_m.gguf"
+      - "${LLAMA_MODEL}"
       - "--port"
       - "39010"
       - "--ctx-size"
@@ -22,6 +22,12 @@ services:
       - "127.0.0.1:39010:39010"
     volumes:
       - "./models:/models:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:39010/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     deploy:
       resources:
         reservations:

@@ -2,11 +2,13 @@
 //!
 //! v1 packager scope (see `docs/adr/0003-phase5-wasmtime-26-pins.md`): the
 //! packager assembles content-addressed, deterministic `dist/` layouts with
-//! manifests + budget checks using only the frozen dependency closure (no
-//! `zip`/`wasm-bindgen-cli`/`web-packager` — all three are MSRV risks on the
-//! pinned toolchain, vetted in scratch). Native AOT cross-link (Windows
-//! `.exe`, Android `.apk`) and `wasm-bindgen` lowering land with the
-//! toolchain-bump ADR; the layout, manifest schema, and checks are final.
+//! manifests + budget checks using only the frozen dependency closure.
+//! Phase 9.3 step 5 lowers through std-only helpers in this file (stored-zip
+//! writer, bindgen-style JS glue, AOT manifests) so no `zip`/
+//! `wasm-bindgen-cli`/`web-packager` dependency is added (all three are MSRV
+//! risks on the pinned toolchain, vetted in scratch). Native AOT cross-link
+//! (Windows `.exe`, Android `.apk`) still lands with the toolchain-bump ADR;
+//! the layout, manifest schema, and checks are final.
 
 use super::{flag_value, resolve_scenario_path, resolve_scene_file};
 use crate::gates_cli::replay_dump;
@@ -234,6 +236,115 @@ fn blake3_file(path: &std::path::Path) -> Result<String, String> {
     Ok(mcp_gate::receipt::blake3_hex(&bytes))
 }
 
+// ---------------------------------------------------------------------------
+// Phase 9.3 step 5: std-only lowering helpers (no new deps).
+//
+// `zip` / `wasm-bindgen-cli` stay out of the frozen closure (MSRV risk, see
+// module docs). The helpers below lower through the same layout using only
+// std so `studio package` can emit deterministic bundles + bindgen-style
+// glue + AOT manifests without a toolchain bump.
+// ---------------------------------------------------------------------------
+
+/// Bitwise CRC-32 (IEEE) without a table: deterministic, std-only.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xffff_ffff;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            let mask = u32::wrapping_neg(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn push_u16_le(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32_le(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Minimal deterministic `stored` (method 0) zip writer: fixed DOS
+/// timestamp, no extra fields, file order = input order.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, bytes) in files {
+        let header_offset = out.len() as u32;
+        let crc = crc32_ieee(bytes);
+        let len = bytes.len() as u32;
+        // Local file header.
+        push_u32_le(&mut out, 0x0403_4b50);
+        push_u16_le(&mut out, 20);
+        push_u16_le(&mut out, 0x0800); // UTF-8 flag, no data descriptor.
+        push_u16_le(&mut out, 0); // method: stored.
+        push_u16_le(&mut out, 0); // mod time (deterministic).
+        push_u16_le(&mut out, 0x21); // mod date 1980-01-01 (deterministic).
+        push_u32_le(&mut out, crc);
+        push_u32_le(&mut out, len);
+        push_u32_le(&mut out, len);
+        push_u16_le(&mut out, name.len() as u16);
+        push_u16_le(&mut out, 0);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(bytes);
+        // Central directory entry.
+        push_u32_le(&mut central, 0x0201_4b50);
+        push_u16_le(&mut central, 20);
+        push_u16_le(&mut central, 20);
+        push_u16_le(&mut central, 0x0800);
+        push_u16_le(&mut central, 0);
+        push_u16_le(&mut central, 0);
+        push_u16_le(&mut central, 0x21);
+        push_u32_le(&mut central, crc);
+        push_u32_le(&mut central, len);
+        push_u32_le(&mut central, len);
+        push_u16_le(&mut central, name.len() as u16);
+        push_u16_le(&mut central, 0);
+        push_u16_le(&mut central, 0);
+        push_u16_le(&mut central, 0);
+        push_u16_le(&mut central, 0);
+        push_u32_le(&mut central, 0);
+        push_u32_le(&mut central, header_offset);
+        central.extend_from_slice(name.as_bytes());
+    }
+    let central_offset = out.len() as u32;
+    let central_len = central.len() as u32;
+    out.extend_from_slice(&central);
+    // End of central directory.
+    push_u32_le(&mut out, 0x0605_4b50);
+    push_u16_le(&mut out, 0);
+    push_u16_le(&mut out, 0);
+    push_u16_le(&mut out, files.len() as u16);
+    push_u16_le(&mut out, files.len() as u16);
+    push_u32_le(&mut out, central_len);
+    push_u32_le(&mut out, central_offset);
+    push_u16_le(&mut out, 0);
+    out
+}
+
+/// `wasm-bindgen`-style JS glue emitted without `wasm-bindgen-cli`: same
+/// shape the shell consumes (`init` + `frame` passthrough), documented as
+/// the lowering until the toolchain-bump ADR swaps in the real bindgen.
+fn wasm_bindgen_glue(wasm_file: &str) -> String {
+    format!(
+        "// Game-Studio Phase 9.3 bindgen lowering (std-only; wasm-bindgen-cli deferred).\n// Mirrors `wasm-bindgen --target web` init() shape over the boot module.\nlet wasm;\nexport async function init(input) {{\n  const source = input ?? '{wasm_file}';\n  const bytes = typeof source === 'string' ? await (await fetch(source)).arrayBuffer() : source;\n  const {{ instance }} = await WebAssembly.instantiate(bytes, {{}});\n  wasm = instance.exports;\n  return wasm;\n}}\nexport function frame() {{\n  if (!wasm) throw new Error('call init() first');\n  return wasm.frame();\n}}\nexport const SUBGROUPS_OFF = 1;\n"
+    )
+}
+
+/// Side-by-side Windows application manifest for the deferred AOT `.exe`.
+fn windows_exe_manifest() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n  <assemblyIdentity version=\"1.0.0.0\" name=\"GameStudio.Game\" type=\"win32\"/>\n  <description>Game-Studio Phase 5 AOT (manifest-only until toolchain bump)</description>\n  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    <security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\"/></requestedPrivileges></security>\n  </trustInfo>\n</assembly>\n"
+        .to_string()
+}
+
+/// Minimal `AndroidManifest.xml` for the deferred AOT `.apk`.
+fn android_manifest_xml() -> String {
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.gamestudio.game\" android:versionCode=\"1\" android:versionName=\"1.0\">\n  <uses-sdk android:minSdkVersion=\"29\" android:targetSdkVersion=\"34\"/>\n  <application android:label=\"Game-Studio\">\n    <activity android:name=\".MainActivity\" android:exported=\"true\">\n      <intent-filter><action android:name=\"android.intent.action.MAIN\"/>\n      <category android:name=\"android.intent.category.LAUNCHER\"/></intent-filter>\n    </activity>\n  </application>\n</manifest>\n"
+        .to_string()
+}
+
 /// `studio package --target <triple> --scene <path>`.
 pub(crate) fn cmd_package(args: &[String]) -> i32 {
     let target_raw = match flag_value(args, "--target") {
@@ -310,7 +421,7 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
             }
         }
         let launcher = format!(
-            "#!/bin/sh\n# Game-Studio Phase 5 desktop artifact (headless runner).\n# Plays the deterministic fixed-step sim: ./dist/game --headless-frames 120\nset -e\nROOT=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"\nFRAMES=120\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --headless-frames) FRAMES=\"$2\"; shift 2;;\n    *) shift;;\n  esac\ndone\nexec \"$ROOT/{triple}/game-bin\" replay --scenario scenarios/qa_boss_rush.ron --ticks \"$FRAMES\" --dump-hash every:60\n"
+            "#!/bin/sh\n# Game-Studio Phase 5 desktop artifact (headless runner).\n# Plays the deterministic fixed-step sim: ./dist/game --headless-frames 120 --scene scenarios/qa_boss_rush.ron\nset -e\nROOT=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"\nSCENE=\"scenarios/qa_boss_rush.ron\"\nFRAMES=120\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --scene) SCENE=\"$2\"; shift 2;;\n    --headless-frames) FRAMES=\"$2\"; shift 2;;\n    *) shift;;\n  esac\ndone\nexec \"$ROOT/{triple}/game-bin\" replay --scenario \"$SCENE\" --ticks \"$FRAMES\" --dump-hash every:60\n"
         );
         let launcher_path = out_root.join("game");
         if let Err(message) = write_file(&launcher_path, launcher.as_bytes()) {
@@ -325,12 +436,22 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
         }
         let launcher_hash = blake3_file(&launcher_path).unwrap_or_default();
         record(&launcher_path, launcher.len(), &launcher_hash);
+        // Step 5 zip lowering (std-only stored zip): scene + launcher bundle.
+        let zip_bytes = stored_zip(&[("scene.ron", &scene_bytes), ("game", launcher.as_bytes())]);
+        let zip_dest = out_dir.join("game.zip");
+        if let Err(message) = write_file(&zip_dest, &zip_bytes) {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+        let zip_hash = blake3_file(&zip_dest).unwrap_or_default();
+        record(&zip_dest, zip_bytes.len(), &zip_hash);
         let manifest = serde_json::json!({
             "name": "game-studio-package",
             "target": triple,
             "scene": scene_file,
             "scene_hash": scene_hash,
             "runner": "headless deterministic sim (windowed shell deferred to toolchain-bump ADR)",
+            "bundle": "game.zip",
             "sandbox": { "fuel": 10_000_000, "mem_mib": 64, "epoch_ms": 50 },
             "artifacts": artifacts,
         });
@@ -345,7 +466,8 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
         0
     } else if triple == "wasm32-unknown-unknown" {
         // Web artifact: minimal boot module + HTML shell with SUBGROUPS_OFF
-        // + ≤ 256 MiB budget check. wasm-bindgen lowering deferred (ADR).
+        // + ≤ 256 MiB budget check. Bindgen lowering is std-only `game.js`
+        // glue (real wasm-bindgen-cli deferred to toolchain-bump ADR).
         let boot = match fixture_bytes("boot.wasm") {
             Ok(bytes) => bytes,
             Err(message) => {
@@ -375,6 +497,31 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
         }
         let html_hash = blake3_file(&html_dest).unwrap_or_default();
         record(&html_dest, html.len(), &html_hash);
+        // Step 5 bindgen lowering (std-only): emit `game.js` glue with the
+        // init()/frame() shape so the shell no longer hand-rolls instantiate.
+        let glue = wasm_bindgen_glue("game.wasm");
+        let glue_dest = out_dir.join("game.js");
+        if let Err(message) = write_file(&glue_dest, glue.as_bytes()) {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+        let glue_hash = blake3_file(&glue_dest).unwrap_or_default();
+        record(&glue_dest, glue.len(), &glue_hash);
+        // Step 5 zip lowering (std-only stored zip): bundle wasm+js+html+scene.
+        let scene_bytes_for_zip = std::fs::read(&scene_dest).unwrap_or_default();
+        let zip_bytes = stored_zip(&[
+            ("game.wasm", &boot),
+            ("game.js", glue.as_bytes()),
+            ("game.html", html.as_bytes()),
+            ("scene.ron", &scene_bytes_for_zip),
+        ]);
+        let zip_dest = out_dir.join("game.zip");
+        if let Err(message) = write_file(&zip_dest, &zip_bytes) {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+        let zip_hash = blake3_file(&zip_dest).unwrap_or_default();
+        record(&zip_dest, zip_bytes.len(), &zip_hash);
         // Budget check: web payload ≤ 256 MiB.
         let total: usize = artifacts
             .iter()
@@ -395,6 +542,8 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
             "scene": scene_file,
             "scene_hash": scene_hash,
             "subgroups_off": true,
+            "wasm_bindgen": { "mode": "std-glue (wasm-bindgen-cli deferred to toolchain-bump ADR)", "js": "game.js", "entry": "init" },
+            "bundle": "game.zip",
             "web_budget_bytes": WEB_BUDGET,
             "web_payload_bytes": total,
             "artifacts": artifacts,
@@ -409,8 +558,10 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
         0
     } else if triple == "x86_64-windows-msvc" || triple == "aarch64-linux-android" {
         // Cross manifest + validation only: no cross toolchain on this host.
-        // The layout/manifest/checks are final; AOT link (.exe/.apk) lands
-        // with the toolchain-bump ADR (same pattern as ADR 0001/0002).
+        // Step 5 (Phase 9.3): emit the concrete AOT manifests the linker will
+        // consume (`.exe` side-by-side manifest / `AndroidManifest.xml`) plus
+        // a deterministic std-only `game.zip` bundle. The AOT link itself
+        // (.exe/.apk) still lands with the toolchain-bump ADR.
         let scene_dest = out_dir.join("scene.ron");
         let scene_bytes = std::fs::read(&scene_file).expect("scene readable");
         if let Err(message) = write_file(&scene_dest, &scene_bytes) {
@@ -418,17 +569,51 @@ pub(crate) fn cmd_package(args: &[String]) -> i32 {
             return 1;
         }
         record(&scene_dest, scene_bytes.len(), &scene_hash);
-        let extra = if triple == "aarch64-linux-android" {
-            serde_json::json!({"texture_check": "pass (scene has no compressed textures; ETC2/ASTC transcode deferred to cooker)"})
+        let (aot_artifact, aot_manifest_name, aot_manifest_bytes, extra) = if triple
+            == "aarch64-linux-android"
+        {
+            let xml = android_manifest_xml();
+            (
+                "game.apk",
+                "AndroidManifest.xml",
+                xml.into_bytes(),
+                serde_json::json!({"texture_check": "pass (scene has no compressed textures; ETC2/ASTC transcode deferred to cooker)"}),
+            )
         } else {
-            serde_json::json!({"cross_link": "deferred (no windows-msvc toolchain on host; manifest only)"})
+            let xml = windows_exe_manifest();
+            (
+                "game.exe.manifest",
+                "game.exe.manifest",
+                xml.into_bytes(),
+                serde_json::json!({"cross_link": "deferred (no windows-msvc toolchain on host; manifest only)"}),
+            )
         };
+        let aot_manifest_dest = out_dir.join(aot_manifest_name);
+        if let Err(message) = write_file(&aot_manifest_dest, &aot_manifest_bytes) {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+        let aot_hash = blake3_file(&aot_manifest_dest).unwrap_or_default();
+        record(&aot_manifest_dest, aot_manifest_bytes.len(), &aot_hash);
+        let zip_bytes = stored_zip(&[
+            ("scene.ron", &scene_bytes),
+            (aot_manifest_name, &aot_manifest_bytes),
+        ]);
+        let zip_dest = out_dir.join("game.zip");
+        if let Err(message) = write_file(&zip_dest, &zip_bytes) {
+            eprintln!("studio-cli: {message}");
+            return 1;
+        }
+        let zip_hash = blake3_file(&zip_dest).unwrap_or_default();
+        record(&zip_dest, zip_bytes.len(), &zip_hash);
         let manifest = serde_json::json!({
             "name": "game-studio-package",
             "target": triple,
             "scene": scene_file,
             "scene_hash": scene_hash,
             "status": "manifest-only (AOT cross-link deferred to toolchain-bump ADR)",
+            "aot": { "artifact": aot_artifact, "manifest": aot_manifest_name, "link": "deferred" },
+            "bundle": "game.zip",
             "detail": extra,
             "artifacts": artifacts,
         });

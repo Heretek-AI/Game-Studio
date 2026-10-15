@@ -2332,6 +2332,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "criterion",
+ "indexmap",
  "postcard",
  "serde",
  "serde_json",
